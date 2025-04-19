@@ -19,7 +19,7 @@ import pandas as pd
 class AgentInput(BaseModel):
     """Base input model for agent communication"""
     text: str
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = {}
     multimodal_data: Optional[List[Dict[str, Any]]] = None
     previous_sections: Optional[List[str]] = None
 
@@ -27,63 +27,131 @@ class AgentOutput(BaseModel):
     """Base output model for agent communication"""
     text: str
     confidence: float
-    metadata: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = {}
     citations: Optional[List[str]] = None
 
 class BaseAgent(ABC):
     def __init__(
         self,
         model_path: str,
-        index_path: Optional[str] = None,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        index_path: str,
+        system_prompt: str = "",
+        section_type: str = "general"
     ):
-        self.device = device
         self.model_path = model_path
-        self.index_path = index_path
-        self.llm = None
-        self.index = None
-        self.section_type = None
-        self._setup_llm()
-        self._setup_index()
-
-    def _setup_llm(self):
-        """Setup the LlamaCPP model"""
+        self.index_path = Path(index_path)
+        self.system_prompt = system_prompt
+        self.section_type = section_type
+        
+        # Initialize LLM
         self.llm = LlamaCPP(
-            model_path=self.model_path,
+            model_path=model_path,
             temperature=0.7,
-            max_new_tokens=1000,
+            max_new_tokens=2048,
             context_window=4096,
-            model_kwargs={"n_gpu_layers": -1} if self.device == "cuda" else {}
+            generate_kwargs={},
+            model_kwargs={"n_gpu_layers": 1}
         )
+        
+        # Initialize embedding model
+        self.embed_model = HuggingFaceEmbedding(
+            model_name="BAAI/bge-small-en-v1.5"
+        )
+        
+        # Initialize service context
+        self.service_context = ServiceContext.from_defaults(
+            llm=self.llm,
+            embed_model=self.embed_model
+        )
+        
+        # Initialize or load knowledge base
+        self._setup_knowledge_base()
 
-    def _setup_index(self):
-        """Setup or load the vector index"""
-        if self.index_path and Path(self.index_path).exists():
-            storage_context = StorageContext.from_defaults(persist_dir=self.index_path)
-            self.index = load_index_from_storage(storage_context)
-        else:
-            # Create a new index
-            embed_model = HuggingFaceEmbedding(model_name="BAAI/bge-small-en-v1.5")
-            node_parser = SimpleNodeParser.from_defaults()
-            service_context = ServiceContext.from_defaults(
-                llm=self.llm,
-                embed_model=embed_model,
-                node_parser=node_parser
+    def _setup_knowledge_base(self):
+        """Setup the agent's knowledge base"""
+        if self.index_path.exists():
+            self.knowledge_base = VectorStoreIndex.load_from_disk(
+                str(self.index_path),
+                service_context=self.service_context
             )
-            self.index = VectorStoreIndex([], service_context=service_context)
+        else:
+            self.index_path.mkdir(parents=True, exist_ok=True)
+            self.knowledge_base = VectorStoreIndex([], service_context=self.service_context)
+            self.knowledge_base.save_to_disk(str(self.index_path))
+
+    def _get_section_prompt(self, input_data: AgentInput) -> str:
+        """Get the prompt for the specific section"""
+        # Base prompt with system instructions
+        prompt = f"{self.system_prompt}\n\n"
+        
+        # Add context from previous sections if available
+        if "previous_sections" in input_data.metadata:
+            prompt += "Previous sections of the paper:\n"
+            for section in input_data.metadata["previous_sections"]:
+                prompt += f"{section}\n\n"
+        
+        # Add relevant knowledge from other sections if available
+        if "relevant_knowledge" in input_data.metadata:
+            prompt += "Relevant information from other sections:\n"
+            for knowledge in input_data.metadata["relevant_knowledge"]:
+                prompt += f"{knowledge['text']}\n\n"
+        
+        # Add the current task
+        prompt += f"Write the {self.section_type} section for the research paper on: {input_data.text}\n"
+        
+        # Add any additional context
+        if "context" in input_data.metadata:
+            prompt += f"Additional context: {input_data.metadata['context']}\n"
+        
+        return prompt
+
+    async def process_input(self, input_data: AgentInput) -> AgentOutput:
+        """Process input and generate output"""
+        # Get the section-specific prompt
+        prompt = self._get_section_prompt(input_data)
+        
+        # Generate response
+        response = self.llm.complete(prompt)
+        
+        # Create output
+        output = AgentOutput(
+            text=response.text,
+            metadata={
+                "section_type": self.section_type,
+                "prompt": prompt,
+                "input_metadata": input_data.metadata
+            }
+        )
+        
+        # Update knowledge base
+        self._update_knowledge_base(output)
+        
+        return output
+
+    def _update_knowledge_base(self, output: AgentOutput):
+        """Update the agent's knowledge base with new information"""
+        # Add the generated content to the knowledge base
+        self.knowledge_base.insert_nodes([output.text])
+        self.knowledge_base.save_to_disk(str(self.index_path))
+
+    def get_knowledge(self, query: str) -> str:
+        """Retrieve relevant knowledge from the agent's knowledge base"""
+        query_engine = self.knowledge_base.as_query_engine()
+        response = query_engine.query(query)
+        return response.response
 
     def add_documents(self, documents: List[Document]):
         """Add documents to the agent's knowledge base"""
-        self.index.insert_nodes(documents)
+        self.knowledge_base.insert_nodes(documents)
 
     def save_index(self, path: str):
         """Save the current index state"""
         Path(path).parent.mkdir(parents=True, exist_ok=True)
-        self.index.storage_context.persist(persist_dir=path)
+        self.knowledge_base.storage_context.persist(persist_dir=path)
 
     def query_index(self, query: str, top_k: int = 3) -> List[Dict[str, Any]]:
         """Query the agent's knowledge base"""
-        query_engine = self.index.as_query_engine()
+        query_engine = self.knowledge_base.as_query_engine()
         response = query_engine.query(query)
         return [
             {
@@ -133,11 +201,6 @@ class BaseAgent(ABC):
                 )
                 documents.append(doc)
         return documents
-
-    @abstractmethod
-    async def process_input(self, input_data: AgentInput) -> AgentOutput:
-        """Process input data and generate output"""
-        pass
 
     @abstractmethod
     async def fine_tune(self, training_data: List[Dict[str, Any]], **kwargs):

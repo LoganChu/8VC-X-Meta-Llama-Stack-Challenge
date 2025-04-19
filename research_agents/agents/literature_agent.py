@@ -10,60 +10,57 @@ class LiteratureAgent(BaseAgent):
         model_path: str = "models/llama-2-7b-chat.gguf",
         index_path: Optional[str] = "indices/literature_index"
     ):
-        super().__init__(model_path, index_path)
-        self.section_type = "literature_review"
-        self.prompt_template = """
-        Write a comprehensive literature review section for a research paper based on the following information:
+        system_prompt = """You are an expert research paper writer specializing in literature reviews.
+        Your task is to write comprehensive and well-structured literature review sections that:
+        1. Provide a thorough overview of existing research
+        2. Identify key themes and trends
+        3. Highlight gaps in current knowledge
+        4. Connect previous work to the current study
+        5. Use proper academic language and citations
         
-        Research Topic: {topic}
-        Previous Research: {previous_research}
-        Citations: {citations}
-        Additional Context: {context}
+        Focus on synthesizing information rather than just summarizing individual papers.
+        Ensure the literature review flows logically and builds a strong foundation for the research."""
         
-        The literature review should:
-        1. Provide a historical context of the research area
-        2. Discuss key theories and concepts
-        3. Review relevant previous studies
-        4. Identify research gaps
-        5. Justify the current study
-        
-        Please write in a clear, academic style suitable for publication, and properly cite all sources.
-        """
+        super().__init__(
+            model_path=model_path,
+            index_path=index_path,
+            system_prompt=system_prompt,
+            section_type="literature_review"
+        )
 
     async def process_input(self, input_data: AgentInput) -> AgentOutput:
-        """Process input and generate literature review section"""
-        # Query the knowledge base for relevant research
-        relevant_research = self.query_index(input_data.text)
-        previous_research = "\n".join([node["text"] for node in relevant_research])
-        
-        # Extract citations from the knowledge base
-        citations = []
-        for node in relevant_research:
-            if node["metadata"].get("type") == "citation":
-                citations.append(
-                    f"{node['metadata'].get('authors', '')} ({node['metadata'].get('year', '')})"
-                )
-        
-        # Prepare the prompt
-        prompt = self.prompt_template.format(
-            topic=input_data.text,
-            previous_research=previous_research,
-            citations=", ".join(citations),
-            context=input_data.metadata.get("context", "")
+        # Get relevant knowledge from the knowledge base
+        relevant_knowledge = self.get_knowledge(
+            f"What are the key themes and findings in the literature about {input_data.text}?"
         )
         
-        # Generate response using LlamaCPP
-        response = self.llm.complete(prompt)
+        # Update input metadata with relevant knowledge
+        input_data.metadata["relevant_knowledge"] = [
+            {"text": relevant_knowledge, "source": "knowledge_base"}
+        ]
         
-        return AgentOutput(
-            text=response.text,
-            confidence=0.9,
-            metadata={
-                "section_type": self.section_type,
-                "sources": [node["metadata"] for node in relevant_research]
-            },
-            citations=citations
-        )
+        # Process the input using the base agent's method
+        output = await super().process_input(input_data)
+        
+        # Add literature-specific metadata
+        output.metadata.update({
+            "section_type": "literature_review",
+            "key_themes": self._extract_key_themes(output.text),
+            "citation_count": self._count_citations(output.text)
+        })
+        
+        return output
+
+    def _extract_key_themes(self, text: str) -> List[str]:
+        """Extract key themes from the literature review"""
+        query = "What are the main themes discussed in this literature review?"
+        response = self.llm.complete(f"Extract key themes from: {text}\n{query}")
+        return [theme.strip() for theme in response.text.split("\n") if theme.strip()]
+
+    def _count_citations(self, text: str) -> int:
+        """Count the number of citations in the text"""
+        # Simple citation counting - can be enhanced with more sophisticated methods
+        return text.count("(") + text.count("[")
 
     async def fine_tune(self, training_data: List[Dict[str, Any]], **kwargs):
         """Fine-tune the agent with literature-specific training data"""

@@ -12,51 +12,58 @@ class MethodsAgent(BaseAgent):
         model_path: str = "models/llama-2-7b-chat.gguf",
         index_path: Optional[str] = "indices/methods_index"
     ):
-        super().__init__(model_path, index_path)
-        self.section_type = "methods"
-        self.prompt_template = """
-        Write a detailed methods section for a research paper based on the following information:
+        system_prompt = """You are an expert research paper writer specializing in methods sections.
+        Your task is to write clear and detailed methods sections that:
+        1. Describe the research design and methodology
+        2. Explain data collection procedures
+        3. Detail analysis techniques
+        4. Specify equipment and materials used
+        5. Include ethical considerations
         
-        Research Topic: {topic}
-        Data Provided: {data}
-        Additional Context: {context}
-        Relevant Knowledge: {knowledge}
+        Focus on providing enough detail for reproducibility while maintaining clarity.
+        Use precise technical language and follow standard academic conventions."""
         
-        The methods section should include:
-        1. Study Design
-        2. Data Collection
-        3. Analysis Methods
-        4. Statistical Methods
-        5. Ethical Considerations
-        
-        Please write in a clear, academic style suitable for publication.
-        """
+        super().__init__(
+            model_path=model_path,
+            index_path=index_path,
+            system_prompt=system_prompt,
+            section_type="methods"
+        )
 
     async def process_input(self, input_data: AgentInput) -> AgentOutput:
-        """Process input and generate methods section"""
-        # Query the knowledge base for relevant information
-        relevant_knowledge = self.query_index(input_data.text)
-        knowledge_text = "\n".join([node["text"] for node in relevant_knowledge])
-        
-        # Prepare the prompt
-        prompt = self.prompt_template.format(
-            topic=input_data.text,
-            data=input_data.metadata.get("data", ""),
-            context=input_data.metadata.get("context", ""),
-            knowledge=knowledge_text
+        # Get relevant knowledge from the knowledge base
+        relevant_knowledge = self.get_knowledge(
+            f"What are the standard methods and protocols for {input_data.text}?"
         )
         
-        # Generate response using LlamaCPP
-        response = self.llm.complete(prompt)
+        # Update input metadata with relevant knowledge
+        input_data.metadata["relevant_knowledge"] = [
+            {"text": relevant_knowledge, "source": "knowledge_base"}
+        ]
         
-        return AgentOutput(
-            text=response.text,
-            confidence=0.9,  # This could be calculated based on model probabilities
-            metadata={
-                "section_type": self.section_type,
-                "sources": [node["metadata"] for node in relevant_knowledge]
-            }
-        )
+        # Process the input using the base agent's method
+        output = await super().process_input(input_data)
+        
+        # Add methods-specific metadata
+        output.metadata.update({
+            "section_type": "methods",
+            "method_categories": self._extract_method_categories(output.text),
+            "technical_terms": self._extract_technical_terms(output.text)
+        })
+        
+        return output
+
+    def _extract_method_categories(self, text: str) -> List[str]:
+        """Extract main method categories from the text"""
+        query = "What are the main method categories described in this section?"
+        response = self.llm.complete(f"Extract method categories from: {text}\n{query}")
+        return [category.strip() for category in response.text.split("\n") if category.strip()]
+
+    def _extract_technical_terms(self, text: str) -> List[str]:
+        """Extract technical terms used in the methods section"""
+        query = "What are the key technical terms used in this methods section?"
+        response = self.llm.complete(f"Extract technical terms from: {text}\n{query}")
+        return [term.strip() for term in response.text.split("\n") if term.strip()]
 
     async def fine_tune(self, training_data: List[Dict[str, Any]], **kwargs):
         """Fine-tune the agent with methods-specific training data"""
