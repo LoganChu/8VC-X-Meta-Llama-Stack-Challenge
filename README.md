@@ -1,2 +1,2 @@
-A Llama-fueled app fine-tuned to generate abstracts for research papers, given a title, keywords and other information. Built using Llama 3 7b and Kaggle research paper datasets. Built as part of the Llama Stack Hackathon. 
-Link to fine-tuned model: https://drive.google.com/file/d/1GNmGZ0x7p1y_IkxP3yOT9HimrjUd3d6J/view?usp=sharing (file was too big to upload to github directly) 
+A Llama Stack backed app to facilitate abstract generation for academic research papers. Trained the llama-3-8b-bnb-4bit (8 billion parameters) model using the LoRA fine-tuning technique on a Kaggle paper abstract dataset. Designed a Streamlit front-end that interfaced with a Fast API backend with Llama Stack orchestration. Built for the 8VC x Meta x HackDuke CodeFest.
+Link to fine-tuned model: https://drive.google.com/file/d/1GNmGZ0x7p1y_IkxP3yOT9HimrjUd3d6J/view?usp=sharing (too big to upload to github)  
