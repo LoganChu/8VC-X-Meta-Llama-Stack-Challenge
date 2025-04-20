@@ -1,4 +1,4 @@
-# Multi-Agent Research Paper Writing System
+# Multi-Agent Abstract Research Paper Writing System
 
 This system implements a collaborative multi-agent approach to research paper writing, where different agents specialize in different sections of a research paper. The system consists of three main agents:
 
