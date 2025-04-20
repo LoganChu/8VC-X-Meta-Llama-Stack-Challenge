@@ -1,1 +1,1 @@
-
+A Llama-fueled app fine-tuned to generate abstracts for research papers, given a title, keywords and other information. Built using Llama 3 7b and Kaggle research paper datasets. Built as part of the Llama Stack Hackathon.
